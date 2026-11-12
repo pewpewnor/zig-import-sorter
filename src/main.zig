@@ -21,10 +21,10 @@ pub fn main(init: std.process.Init) !u8 {
     var has_paths = false;
     while (argument_index < arguments.len) : (argument_index += 1) {
         const argument = arguments[argument_index];
-        if (!positional and std.mem.eql(u8, argument, "--imports-sorter-default-path")) {
+        if (!positional and std.mem.eql(u8, argument, "--import-sorter-default-path")) {
             argument_index += 1;
             if (argument_index == arguments.len) {
-                std.log.err("--imports-sorter-default-path requires a path", .{});
+                std.log.err("--import-sorter-default-path requires a path", .{});
                 return 2;
             }
             try default_paths.append(init.gpa, arguments[argument_index]);
@@ -35,13 +35,13 @@ pub fn main(init: std.process.Init) !u8 {
             continue;
         }
         if (!positional and std.mem.startsWith(u8, argument, "-")) {
-            const mode = if (std.mem.eql(u8, argument, "--imports-sorter-write")) true else if (std.mem.eql(u8, argument, "--imports-sorter-check")) false else {
+            const mode = if (std.mem.eql(u8, argument, "--import-sorter-write")) true else if (std.mem.eql(u8, argument, "--import-sorter-check")) false else {
                 std.log.err("unknown option: {s}", .{argument});
                 return 2;
             };
             if (selected_mode) |previous| {
                 if (previous != mode) {
-                    std.log.err("--imports-sorter-write and --imports-sorter-check cannot be combined", .{});
+                    std.log.err("--import-sorter-write and --import-sorter-check cannot be combined", .{});
                     return 2;
                 }
             }

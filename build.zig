@@ -45,11 +45,11 @@ fn createRun(b: *std.Build, executable: *std.Build.Step.Compile, options: Option
     run.has_side_effects = true;
     run.setCwd(b.path("."));
     for (options.paths) |path| {
-        run.addArg("--imports-sorter-default-path");
+        run.addArg("--import-sorter-default-path");
         run.addDirectoryArg2(path, .{});
     }
     if (options.check) {
-        run.addArg("--imports-sorter-check");
+        run.addArg("--import-sorter-check");
     }
     run.addPassthruArgs();
     return run;
