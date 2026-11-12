@@ -1,7 +1,7 @@
 .{
-    .name = .zig_imports_sorter,
+    .name = .zig_import_sorter,
     .version = "0.1.0",
-    .fingerprint = 0x3614468c963072d0,
+    .fingerprint = 0xb3f1b3ff7044003c,
     .minimum_zig_version = "0.17.1",
     .dependencies = .{
         .zls = .{

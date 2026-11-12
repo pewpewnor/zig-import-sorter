@@ -8,28 +8,33 @@ pub fn build(b: *std.Build) void {
         .optimize = .debug,
         .imports = &.{.{ .name = "zls", .module = zls.module("zls") }},
     });
-    const executable = b.addExecutable(.{ .name = "zig-imports-sorter", .root_module = source });
+    const executable = b.addExecutable(.{ .name = "zig-import-sorter", .root_module = source });
     const tests = b.addTest(.{ .root_module = source });
     b.step("test", "Test import sorting and Zig formatting").dependOn(&b.addRunArtifact(tests).step);
     const check = b.step("check", "Compile the formatter and its tests");
     check.dependOn(&executable.step);
     check.dependOn(&tests.step);
-    const paths = &.{ "build.zig", "build.zig.zon", "src" };
+    const paths = &.{ b.path("build.zig"), b.path("build.zig.zon"), b.path("src") };
     const fmt = createRun(b, executable, .{ .paths = paths });
-    b.step("fmt", "Organize imports and format Zig sources").dependOn(&fmt.step);
+    const zig_fmt = b.addFmt(.{ .paths = paths });
+    zig_fmt.step.dependOn(&fmt.step);
+    b.step("fmt", "Organize imports and format Zig sources").dependOn(&zig_fmt.step);
     const fmt_check = createRun(b, executable, .{ .paths = paths, .check = true });
-    b.step("fmt-check", "Check Zig source formatting").dependOn(&fmt_check.step);
+    const zig_fmt_check = b.addFmt(.{ .paths = paths, .check = true });
+    const fmt_check_step = b.step("fmt-check", "Check import ordering and Zig source formatting");
+    fmt_check_step.dependOn(&fmt_check.step);
+    fmt_check_step.dependOn(&zig_fmt_check.step);
 }
 
 pub const Options = struct {
-    paths: []const []const u8,
+    paths: []const std.Build.LazyPath,
     check: bool = false,
 };
 
-pub fn addRun(b: *std.Build, options: Options) *std.Build.Step.Run {
-    const dependency = b.dependency("zig-imports-sorter", .{});
+pub fn addImportSorter(b: *std.Build, options: Options) *std.Build.Step.Run {
+    const dependency = b.dependency("zig-import-sorter", .{});
     const executable = b.addExecutable(.{
-        .name = "zig-imports-sorter",
+        .name = "zig-import-sorter",
         .root_module = dependency.module("formatter"),
     });
     return createRun(b, executable, options);
@@ -40,15 +45,11 @@ fn createRun(b: *std.Build, executable: *std.Build.Step.Compile, options: Option
     run.has_side_effects = true;
     run.setCwd(b.path("."));
     for (options.paths) |path| {
-        if (std.mem.endsWith(u8, path, ".zig") or std.mem.endsWith(u8, path, ".zon")) {
-            run.addFileArg(b.path(path));
-        } else {
-            run.addDirectoryArg(b.path(path));
-        }
+        run.addArg("--imports-sorter-default-path");
+        run.addDirectoryArg2(path, .{});
     }
-    run.addArg("--user-args");
     if (options.check) {
-        run.addArg("--check");
+        run.addArg("--imports-sorter-check");
     }
     run.addPassthruArgs();
     return run;

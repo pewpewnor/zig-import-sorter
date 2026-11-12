@@ -15,23 +15,33 @@ pub fn main(init: std.process.Init) !u8 {
         }
         files.deinit(init.gpa);
     }
-    var separator: usize = 1;
-    while (separator < arguments.len and !std.mem.eql(u8, arguments[separator], "--user-args")) : (separator += 1) {}
-    std.debug.assert(separator < arguments.len);
+    var default_paths: std.ArrayList([]const u8) = .empty;
+    defer default_paths.deinit(init.gpa);
+    var argument_index: usize = 1;
     var has_paths = false;
-    for (arguments[separator + 1 ..]) |argument| {
+    while (argument_index < arguments.len) : (argument_index += 1) {
+        const argument = arguments[argument_index];
+        if (!positional and std.mem.eql(u8, argument, "--imports-sorter-default-path")) {
+            argument_index += 1;
+            if (argument_index == arguments.len) {
+                std.log.err("--imports-sorter-default-path requires a path", .{});
+                return 2;
+            }
+            try default_paths.append(init.gpa, arguments[argument_index]);
+            continue;
+        }
         if (!positional and std.mem.eql(u8, argument, "--")) {
             positional = true;
             continue;
         }
         if (!positional and std.mem.startsWith(u8, argument, "-")) {
-            const mode = if (std.mem.eql(u8, argument, "-w") or std.mem.eql(u8, argument, "--write")) true else if (std.mem.eql(u8, argument, "-c") or std.mem.eql(u8, argument, "--check")) false else {
+            const mode = if (std.mem.eql(u8, argument, "--imports-sorter-write")) true else if (std.mem.eql(u8, argument, "--imports-sorter-check")) false else {
                 std.log.err("unknown option: {s}", .{argument});
                 return 2;
             };
             if (selected_mode) |previous| {
                 if (previous != mode) {
-                    std.log.err("--write and --check cannot be combined", .{});
+                    std.log.err("--imports-sorter-write and --imports-sorter-check cannot be combined", .{});
                     return 2;
                 }
             }
@@ -43,7 +53,7 @@ pub fn main(init: std.process.Init) !u8 {
         try collectFiles(init.io, init.gpa, argument, &files);
     }
     if (!has_paths) {
-        for (arguments[1..separator]) |path| {
+        for (default_paths.items) |path| {
             try collectFiles(init.io, init.gpa, path, &files);
         }
     }
