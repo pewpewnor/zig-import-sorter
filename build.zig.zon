@@ -1,0 +1,13 @@
+.{
+    .name = .zig_imports_sorter,
+    .version = "0.1.0",
+    .fingerprint = 0x3614468c963072d0,
+    .minimum_zig_version = "0.17.1",
+    .dependencies = .{
+        .zls = .{
+            .url = "git+https://github.com/zigtools/zls#542462c4ddf045493fa9ca028ee6bc3f38b2754a",
+            .hash = "zls-0.17.0-rmm5fjYwHAAfoBoodSZ8k3NYPa8ZZG60JPlOTGFrAhTw",
+        },
+    },
+    .paths = .{ "build.zig", "build.zig.zon", "src" },
+}

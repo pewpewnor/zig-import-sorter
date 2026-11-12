@@ -1,0 +1,16 @@
+# Zig build outputs and caches, including nested packages
+.zig-cache/
+zig-out/
+zig-pkg/
+
+# Editor settings and temporary files
+.idea/
+.vscode/
+*.sublime-workspace
+*.swp
+*.swo
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db
