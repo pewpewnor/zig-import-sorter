@@ -5,14 +5,9 @@ const formatSource = @import("format_source.zig").formatSource;
 pub fn main(init: std.process.Init) !u8 {
     const arguments = try init.minimal.args.toSlice(init.gpa);
     defer init.gpa.free(arguments);
-    if (arguments.len < 3) {
-        std.log.err("usage: zig-imports-sorter --write|--check path...", .{});
-        return 2;
-    }
-    const should_write = if (std.mem.eql(u8, arguments[1], "--write")) true else if (std.mem.eql(u8, arguments[1], "--check")) false else {
-        std.log.err("expected --write or --check", .{});
-        return 2;
-    };
+    var should_write = true;
+    var selected_mode: ?bool = null;
+    var positional = false;
     var files: std.ArrayList([]const u8) = .empty;
     defer {
         for (files.items) |path| {
@@ -20,8 +15,37 @@ pub fn main(init: std.process.Init) !u8 {
         }
         files.deinit(init.gpa);
     }
-    for (arguments[2..]) |path| {
-        try collectFiles(init.io, init.gpa, path, &files);
+    var separator: usize = 1;
+    while (separator < arguments.len and !std.mem.eql(u8, arguments[separator], "--user-args")) : (separator += 1) {}
+    std.debug.assert(separator < arguments.len);
+    var has_paths = false;
+    for (arguments[separator + 1 ..]) |argument| {
+        if (!positional and std.mem.eql(u8, argument, "--")) {
+            positional = true;
+            continue;
+        }
+        if (!positional and std.mem.startsWith(u8, argument, "-")) {
+            const mode = if (std.mem.eql(u8, argument, "-w") or std.mem.eql(u8, argument, "--write")) true else if (std.mem.eql(u8, argument, "-c") or std.mem.eql(u8, argument, "--check")) false else {
+                std.log.err("unknown option: {s}", .{argument});
+                return 2;
+            };
+            if (selected_mode) |previous| {
+                if (previous != mode) {
+                    std.log.err("--write and --check cannot be combined", .{});
+                    return 2;
+                }
+            }
+            selected_mode = mode;
+            should_write = mode;
+            continue;
+        }
+        has_paths = true;
+        try collectFiles(init.io, init.gpa, argument, &files);
+    }
+    if (!has_paths) {
+        for (arguments[1..separator]) |path| {
+            try collectFiles(init.io, init.gpa, path, &files);
+        }
     }
     std.mem.sort([]const u8, files.items, {}, lessThan);
     const context: FileContext = .{ .io = init.io, .allocator = init.gpa, .environ = init.environ_map };
