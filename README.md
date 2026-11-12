@@ -1,6 +1,6 @@
 # zig-import-sorter
 
-A Zig build dependency that sorts imports with ZLS and formats `.zig` and `.zon` files.
+A Zig build dependency that sorts imports in `.zig` and `.zon` files with ZLS.
 
 ## Use from `build.zig`
 
@@ -9,7 +9,7 @@ const std = @import("std");
 const import_sorter = @import("zig-import-sorter");
 
 pub fn build(b: *std.Build) void {
-    const paths = &.{ b.path("build.zig"), b.path("build.zig.zon"), b.path("src") };
+    const paths = &.{ b.path("build.zig"), b.path("src") };
     const fmt = import_sorter.addImportSorter(b, .{ .paths = paths });
     b.step("fmt", "Sort imports and format Zig files").dependOn(&fmt.step);
 
@@ -33,7 +33,7 @@ zig build fmt -- --import-sorter-check src/example.zig
 
 Explicit paths replace the configured paths. Directories are searched recursively;
 hidden entries, `zig-out`, `zig-pkg`, and symlinks found inside directories are skipped.
-`.zig` files have imports organized and are formatted; `.zon` files are formatted.
+`.zig` and `.zon` files have imports organized and are formatted.
 Other file types are ignored.
 
 The run accepts `--import-sorter-write` or `--import-sorter-check` (the default is
