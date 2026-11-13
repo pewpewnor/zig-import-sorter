@@ -1,16 +1,20 @@
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
-    const zls = b.dependency("zls", .{ .target = b.graph.host, .optimize = .debug });
+    const optimize = b.standardOptimizeOption(.{});
+    const zls = b.dependency("zls", .{ .target = b.graph.host, .optimize = optimize });
     const source = b.addModule("formatter", .{
         .root_source_file = b.path("src/main.zig"),
         .target = b.graph.host,
-        .optimize = .debug,
+        .optimize = optimize,
         .imports = &.{.{ .name = "zls", .module = zls.module("zls") }},
     });
     const executable = b.addExecutable(.{ .name = "zig-import-sorter", .root_module = source });
+    b.installArtifact(executable);
     const tests = b.addTest(.{ .root_module = source });
-    b.step("test", "Test import sorting and Zig formatting").dependOn(&b.addRunArtifact(tests).step);
+    const test_step = b.step("test", "Test import sorting, formatting, and CLI behavior");
+    test_step.dependOn(&b.addRunArtifact(tests).step);
+    addCliTests(b, executable, test_step);
     const check = b.step("check", "Compile the formatter and its tests");
     check.dependOn(&executable.step);
     check.dependOn(&tests.step);
@@ -29,14 +33,13 @@ pub fn build(b: *std.Build) void {
 pub const Options = struct {
     paths: []const std.Build.LazyPath,
     check: bool = false,
+    dependency: ?*std.Build.Dependency = null,
+    passthrough_args: bool = true,
 };
 
-pub fn addImportSorter(b: *std.Build, options: Options) *std.Build.Step.Run {
-    const dependency = b.dependency("zig-import-sorter", .{});
-    const executable = b.addExecutable(.{
-        .name = "zig-import-sorter",
-        .root_module = dependency.module("formatter"),
-    });
+pub fn addSortImports(b: *std.Build, options: Options) *std.Build.Step.Run {
+    const dependency = options.dependency orelse b.dependency("zig-import-sorter", .{});
+    const executable = dependency.artifact("zig-import-sorter");
     return createRun(b, executable, options);
 }
 
@@ -51,6 +54,34 @@ fn createRun(b: *std.Build, executable: *std.Build.Step.Compile, options: Option
     if (options.check) {
         run.addArg("--import-sorter-check");
     }
-    run.addPassthruArgs();
+    if (options.passthrough_args) run.addPassthruArgs();
     return run;
+}
+
+fn addCliTests(b: *std.Build, executable: *std.Build.Step.Compile, test_step: *std.Build.Step) void {
+    const cases = [_]struct { args: []const []const u8, exit_code: u8 }{
+        .{ .args = &.{}, .exit_code = 0 },
+        .{ .args = &.{"--unknown"}, .exit_code = 2 },
+        .{ .args = &.{"--import-sorter-default-path"}, .exit_code = 2 },
+        .{ .args = &.{ "--import-sorter-write", "--import-sorter-check" }, .exit_code = 2 },
+    };
+    for (cases) |case| {
+        const run = b.addRunArtifact(executable);
+        run.addArgs(case.args);
+        run.expectExitCode(case.exit_code);
+        if (case.exit_code != 0) run.expectStdErrMatch("error:");
+        test_step.dependOn(&run.step);
+    }
+    const fixtures = b.addWriteFiles();
+    const dirty = fixtures.add("dirty.zig", "const zebra = @import(\"zebra\");\nconst alpha = @import(\"alpha\");\n");
+    const clean = fixtures.add("clean.zon", ".{ .value = 42 }\n");
+    for ([_]struct { path: std.Build.LazyPath, exit_code: u8 }{
+        .{ .path = dirty, .exit_code = 1 },
+        .{ .path = clean, .exit_code = 0 },
+    }) |case| {
+        const run = createRun(b, executable, .{ .paths = &.{case.path}, .check = true, .passthrough_args = false });
+        run.expectExitCode(case.exit_code);
+        if (case.exit_code != 0) run.expectStdErrMatch("error:");
+        test_step.dependOn(&run.step);
+    }
 }

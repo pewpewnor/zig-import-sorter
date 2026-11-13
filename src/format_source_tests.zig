@@ -70,3 +70,30 @@ test "applies byte offsets after unicode text and normalizes crlf" {
     defer std.testing.allocator.free(repeated);
     try std.testing.expectEqualStrings(actual, repeated);
 }
+
+test "formats empty sources and rejects invalid zon" {
+    const empty = try format("", .zig);
+    defer std.testing.allocator.free(empty);
+    try std.testing.expectEqualStrings("", empty);
+    try std.testing.expectError(error.InvalidSyntax, format(".{ .value = }", .zon));
+}
+
+test "preserves documentation and comments while organizing imports" {
+    const source =
+        \\//! Module documentation.
+        \\const zebra = @import("zebra"); // zebra comment
+        \\const alpha = @import("alpha"); // alpha comment
+        \\
+        \\/// Public documentation.
+        \\pub const value = 42;
+        \\
+    ;
+    const actual = try format(source, .zig);
+    defer std.testing.allocator.free(actual);
+    for ([_][]const u8{ "//! Module documentation.", "// zebra comment", "// alpha comment", "/// Public documentation.", "pub const value = 42;" }) |text| {
+        try std.testing.expect(std.mem.find(u8, actual, text) != null);
+    }
+    const repeated = try format(actual, .zig);
+    defer std.testing.allocator.free(repeated);
+    try std.testing.expectEqualStrings(actual, repeated);
+}

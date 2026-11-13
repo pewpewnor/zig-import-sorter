@@ -5,57 +5,18 @@ const formatSource = @import("format_source.zig").formatSource;
 pub fn main(init: std.process.Init) !u8 {
     const arguments = try init.minimal.args.toSlice(init.gpa);
     defer init.gpa.free(arguments);
-    var should_write = true;
-    var selected_mode: ?bool = null;
-    var positional = false;
+    var options = parseArguments(init.gpa, arguments[1..]) catch |err| {
+        std.log.err("invalid arguments: {s}", .{@errorName(err)});
+        return 2;
+    };
+    defer options.deinit(init.gpa);
     var files: std.ArrayList([]const u8) = .empty;
     defer {
-        for (files.items) |path| {
-            init.gpa.free(path);
-        }
+        for (files.items) |path| init.gpa.free(path);
         files.deinit(init.gpa);
     }
-    var default_paths: std.ArrayList([]const u8) = .empty;
-    defer default_paths.deinit(init.gpa);
-    var argument_index: usize = 1;
-    var has_paths = false;
-    while (argument_index < arguments.len) : (argument_index += 1) {
-        const argument = arguments[argument_index];
-        if (!positional and std.mem.eql(u8, argument, "--import-sorter-default-path")) {
-            argument_index += 1;
-            if (argument_index == arguments.len) {
-                std.log.err("--import-sorter-default-path requires a path", .{});
-                return 2;
-            }
-            try default_paths.append(init.gpa, arguments[argument_index]);
-            continue;
-        }
-        if (!positional and std.mem.eql(u8, argument, "--")) {
-            positional = true;
-            continue;
-        }
-        if (!positional and std.mem.startsWith(u8, argument, "-")) {
-            const mode = if (std.mem.eql(u8, argument, "--import-sorter-write")) true else if (std.mem.eql(u8, argument, "--import-sorter-check")) false else {
-                std.log.err("unknown option: {s}", .{argument});
-                return 2;
-            };
-            if (selected_mode) |previous| {
-                if (previous != mode) {
-                    std.log.err("--import-sorter-write and --import-sorter-check cannot be combined", .{});
-                    return 2;
-                }
-            }
-            selected_mode = mode;
-            should_write = mode;
-            continue;
-        }
-        has_paths = true;
-        try collectFiles(init.io, init.gpa, argument, &files);
-    }
-    if (!has_paths) {
-        for (default_paths.items) |path| {
-            try collectFiles(init.io, init.gpa, path, &files);
-        }
+    for (options.paths()) |path| {
+        try collectFiles(init.io, init.gpa, path, &files);
     }
     std.mem.sort([]const u8, files.items, {}, lessThan);
     const context: FileContext = .{ .io = init.io, .allocator = init.gpa, .environ = init.environ_map };
@@ -64,7 +25,7 @@ pub fn main(init: std.process.Init) !u8 {
         if (index != 0 and std.mem.eql(u8, path, files.items[index - 1])) {
             continue;
         }
-        const status = processFile(context, path, should_write) catch |err| {
+        const status = processFile(context, path, options.should_write) catch |err| {
             std.log.err("{s}: {s}", .{ path, @errorName(err) });
             has_failure = true;
             continue;
@@ -80,6 +41,49 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
     return 0;
+}
+
+const Arguments = struct {
+    should_write: bool = true,
+    explicit_paths: std.ArrayList([]const u8) = .empty,
+    default_paths: std.ArrayList([]const u8) = .empty,
+
+    fn deinit(self: *Arguments, allocator: std.mem.Allocator) void {
+        self.explicit_paths.deinit(allocator);
+        self.default_paths.deinit(allocator);
+    }
+
+    fn paths(self: Arguments) []const []const u8 {
+        return if (self.explicit_paths.items.len != 0) self.explicit_paths.items else self.default_paths.items;
+    }
+};
+
+fn parseArguments(allocator: std.mem.Allocator, arguments: []const []const u8) !Arguments {
+    var result: Arguments = .{};
+    errdefer result.deinit(allocator);
+    var selected_mode: ?bool = null;
+    var positional = false;
+    var index: usize = 0;
+    while (index < arguments.len) : (index += 1) {
+        const argument = arguments[index];
+        if (!positional and std.mem.eql(u8, argument, "--import-sorter-default-path")) {
+            index += 1;
+            if (index == arguments.len) return error.MissingDefaultPath;
+            try result.default_paths.append(allocator, arguments[index]);
+        } else if (!positional and std.mem.eql(u8, argument, "--")) {
+            positional = true;
+        } else if (!positional and std.mem.startsWith(u8, argument, "-")) {
+            const mode = if (std.mem.eql(u8, argument, "--import-sorter-write")) true else if (std.mem.eql(u8, argument, "--import-sorter-check")) false else return error.UnknownOption;
+            if (selected_mode) |previous| {
+                if (previous != mode) return error.ConflictingModes;
+            }
+            selected_mode = mode;
+            result.should_write = mode;
+        } else {
+            try result.explicit_paths.append(allocator, argument);
+        }
+    }
+    return result;
 }
 
 const FileStatus = enum { clean, formatted, needs_formatting };
@@ -174,4 +178,105 @@ test "check leaves dirty files unchanged and write produces a clean result" {
     const retained = try directory.dir.readFileAlloc(std.testing.io, "fixture.zig", std.testing.allocator, .limited(4096));
     defer std.testing.allocator.free(retained);
     try std.testing.expectEqualStrings(invalid, retained);
+}
+
+test "arguments select defaults and explicit paths replace them" {
+    const allocator = std.testing.allocator;
+    var empty = try parseArguments(allocator, &.{});
+    defer empty.deinit(allocator);
+    try std.testing.expect(empty.should_write);
+    try std.testing.expectEqual(@as(usize, 0), empty.paths().len);
+
+    var defaults = try parseArguments(allocator, &.{ "--import-sorter-default-path", "src", "--import-sorter-default-path", "build.zig" });
+    defer defaults.deinit(allocator);
+    try std.testing.expectEqualSlices([]const u8, &.{ "src", "build.zig" }, defaults.paths());
+
+    var explicit = try parseArguments(allocator, &.{ "--import-sorter-default-path", "missing", "one.zig", "--import-sorter-check", "two.zon" });
+    defer explicit.deinit(allocator);
+    try std.testing.expect(!explicit.should_write);
+    try std.testing.expectEqualSlices([]const u8, &.{ "one.zig", "two.zon" }, explicit.paths());
+}
+
+test "arguments handle terminator repeated modes and invalid options" {
+    const allocator = std.testing.allocator;
+    var positional = try parseArguments(allocator, &.{ "--import-sorter-check", "--import-sorter-check", "--", "-file.zig", "--import-sorter-write" });
+    defer positional.deinit(allocator);
+    try std.testing.expect(!positional.should_write);
+    try std.testing.expectEqualSlices([]const u8, &.{ "-file.zig", "--import-sorter-write" }, positional.paths());
+    var write = try parseArguments(allocator, &.{ "--import-sorter-write", "--import-sorter-write" });
+    defer write.deinit(allocator);
+    try std.testing.expect(write.should_write);
+    try std.testing.expectError(error.UnknownOption, parseArguments(allocator, &.{ "file.zig", "--unknown" }));
+    try std.testing.expectError(error.MissingDefaultPath, parseArguments(allocator, &.{ "--import-sorter-default-path", "src", "--import-sorter-default-path" }));
+    try std.testing.expectError(error.ConflictingModes, parseArguments(allocator, &.{ "--import-sorter-write", "--import-sorter-check" }));
+    try std.testing.expectError(error.ConflictingModes, parseArguments(allocator, &.{ "--import-sorter-check", "--import-sorter-write" }));
+}
+
+test "file discovery recurses and excludes hidden build and unrelated entries" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var directory = std.testing.tmpDir(.{});
+    defer directory.cleanup();
+    for ([_][]const u8{ "nested", ".hidden", "zig-out", "zig-pkg" }) |path| {
+        try directory.dir.createDir(io, path, .default_dir);
+    }
+    for ([_][]const u8{ "root.zig", "nested/build.zig.zon", "readme.md", ".hidden.zig", ".hidden/skip.zig", "zig-out/skip.zig", "zig-pkg/skip.zig" }) |path| {
+        try directory.dir.writeFile(io, .{ .sub_path = path, .data = "" });
+    }
+    const root = try directory.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (files.items) |path| allocator.free(path);
+        files.deinit(allocator);
+    }
+    try collectFiles(io, allocator, root, &files);
+    std.mem.sort([]const u8, files.items, {}, lessThan);
+    try std.testing.expectEqual(@as(usize, 2), files.items.len);
+    try std.testing.expect(std.mem.endsWith(u8, files.items[0], "nested/build.zig.zon"));
+    try std.testing.expect(std.mem.endsWith(u8, files.items[1], "root.zig"));
+    const ignored = try std.Io.Dir.path.join(allocator, &.{ root, "readme.md" });
+    defer allocator.free(ignored);
+    try collectFiles(io, allocator, ignored, &files);
+    try std.testing.expectEqual(@as(usize, 2), files.items.len);
+    const missing = try std.Io.Dir.path.join(allocator, &.{ root, "missing.zig" });
+    defer allocator.free(missing);
+    try std.testing.expectError(error.FileNotFound, collectFiles(io, allocator, missing, &files));
+}
+
+test "file discovery skips symlinks and rejects explicit symlink paths" {
+    const allocator = std.testing.allocator;
+    const io = std.testing.io;
+    var directory = std.testing.tmpDir(.{});
+    defer directory.cleanup();
+    try directory.dir.writeFile(io, .{ .sub_path = "source.zig", .data = "" });
+    directory.dir.symLink(io, "source.zig", "link.zig", .{}) catch |err| switch (err) {
+        error.AccessDenied, error.PermissionDenied => return error.SkipZigTest,
+        else => return err,
+    };
+    try directory.dir.symLink(io, ".", "loop", .{ .is_directory = true });
+    const root = try directory.dir.realPathFileAlloc(io, ".", allocator);
+    defer allocator.free(root);
+    var files: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (files.items) |path| allocator.free(path);
+        files.deinit(allocator);
+    }
+    try collectFiles(io, allocator, root, &files);
+    try std.testing.expectEqual(@as(usize, 1), files.items.len);
+    try std.testing.expect(std.mem.endsWith(u8, files.items[0], "source.zig"));
+    const link = try std.Io.Dir.path.join(allocator, &.{ root, "link.zig" });
+    defer allocator.free(link);
+    try std.testing.expectError(error.UnsupportedPath, collectFiles(io, allocator, link, &files));
+}
+
+fn parseWithAllocator(allocator: std.mem.Allocator) !void {
+    var arguments = try parseArguments(allocator, &.{ "--import-sorter-default-path", "src", "file.zig", "--import-sorter-check" });
+    defer arguments.deinit(allocator);
+    try std.testing.expect(!arguments.should_write);
+    try std.testing.expectEqual(@as(usize, 1), arguments.paths().len);
+}
+
+test "argument parsing releases allocations on allocation failure" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, parseWithAllocator, .{});
 }
